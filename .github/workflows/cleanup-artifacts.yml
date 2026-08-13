@@ -1,0 +1,126 @@
+name: Admin - Cleanup old artifacts (no CLI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      older_than_days:
+        description: 'Delete artifacts older than N days (ignored if delete_all=true)'
+        default: '10'
+        required: true
+      name_prefixes:
+        description: 'Comma-separated prefixes to delete (leave blank to match ALL names)'
+        default: 'pr-coverage-,dev-coverage-'
+        required: false
+      delete_all:
+        description: 'Ignore age & prefixes, delete ALL artifacts in this repo'
+        type: boolean
+        default: false
+        required: false
+      dry_run:
+        description: 'List what would be deleted without deleting'
+        type: boolean
+        default: false
+        required: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # needed to delete artifacts
+      contents: read
+    steps:
+      - name: Delete artifacts via API
+        uses: actions/github-script@v7
+        with:
+          script: |
+            function fmtBytes (b) {
+              if (!b || b <= 0) return '0 B';
+              const u = ['B','KB','MB','GB','TB']; let i = Math.floor(Math.log(b)/Math.log(1024));
+              i = Math.max(0, Math.min(i, u.length-1));
+              return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i];
+            }
+
+            const days = parseInt(core.getInput('older_than_days') || '0', 10);
+            const deleteAll = core.getInput('delete_all') === 'true';
+            const dryRun = core.getInput('dry_run') === 'true';
+            const prefixesRaw = core.getInput('name_prefixes') || '';
+            const prefixes = prefixesRaw.split(',').map(p => p.trim()).filter(Boolean);
+            const cutoff = Date.now() - days*24*60*60*1000;
+
+            core.info(`Params -> older_than_days=${days}, delete_all=${deleteAll}, dry_run=${dryRun}, prefixes=[${prefixes.join(', ')}]`);
+
+            // Get ALL artifacts in the repo
+            const all = [];
+            for await (const page of github.paginate.iterator(
+              github.rest.actions.listArtifactsForRepo,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+            )) {
+              all.push(...page.data);
+            }
+
+            if (all.length === 0) {
+              core.info('No artifacts exist in this repo.');
+              await core.summary.addHeading('Artifact cleanup').addRaw('No artifacts found.\n').write();
+              return;
+            }
+
+            // Basic debug listing (first 30)
+            const sorted = all
+              .map(a => ({...a, createdTs: new Date(a.created_at).getTime()}))
+              .sort((a,b) => a.createdTs - b.createdTs);
+            const oldest = sorted[0];
+            const newest = sorted[sorted.length - 1];
+
+            core.info(`Total artifacts: ${all.length}`);
+            core.info(`Oldest: ${oldest.name} @ ${oldest.created_at}`);
+            core.info(`Newest: ${newest.name} @ ${newest.created_at}`);
+
+            const debugList = sorted.slice(0, 30).map(a => `• ${a.name} (${a.created_at}) size=${fmtBytes(a.size_in_bytes||0)}`);
+
+            // Filter candidates
+            const candidates = sorted.filter(a => {
+              if (deleteAll) return true;
+              const created = a.createdTs;
+              const ageOk = created < cutoff;
+              const prefixOk = prefixes.length === 0 || prefixes.some(p => a.name.startsWith(p));
+              return ageOk && prefixOk;
+            });
+
+            // Delete
+            let deleted = 0;
+            let freed = 0;
+            const lines = [];
+
+            for (const a of candidates) {
+              lines.push(`• ${a.name} (created ${a.created_at}) size=${fmtBytes(a.size_in_bytes||0)}`);
+              if (!dryRun) {
+                try {
+                  await github.rest.actions.deleteArtifact({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    artifact_id: a.id
+                  });
+                  deleted++;
+                  freed += (a.size_in_bytes || 0);
+                } catch (e) {
+                  core.warning(`Failed to delete ${a.name} (${a.id}): ${e.message}`);
+                }
+              }
+            }
+
+            const header = dryRun
+              ? `Would delete ${candidates.length} artifact(s).`
+              : `Deleted ${deleted} artifact(s). Freed approx ${fmtBytes(freed)}.`;
+
+            core.info(header);
+            await core.summary
+              .addHeading('Artifact cleanup')
+              .addRaw(`Scanned **${all.length}** artifacts.\n`)
+              .addRaw(`Oldest: ${oldest.created_at} — ${oldest.name}\n`)
+              .addRaw(`Newest: ${newest.created_at} — ${newest.name}\n\n`)
+              .addRaw(`${header}\n\n`)
+              .addHeading('First 30 artifacts in repo (for debugging)', 3)
+              .addList(debugList)
+              .addHeading('Candidates', 3)
+              .addList(lines.slice(0, 100))  // keep summary manageable
+              .write();

@@ -1,0 +1,11 @@
+{
+  "bindings": [
+    {
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "cleanupTimer",
+      "schedule": "0 0 12 * * *"
+    }
+  ],
+  "scriptFile": "../dist/cleanup-job/index.js"
+}

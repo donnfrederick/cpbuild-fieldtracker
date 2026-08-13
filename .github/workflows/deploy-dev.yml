@@ -1,0 +1,124 @@
+name: 'DEV - Azure Static Web App CI/CD'
+
+on:
+  push:
+    branches:
+      - dev
+
+env:
+  NODE_ENV: development
+  VITE_APP_ENV: dev_env
+  VITE_API_BASE_URL_V2: https://api-v2-dev-fygugec5fjcpfcct.westus-01.azurewebsites.net
+
+jobs:
+  build_and_deploy_job:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    name: 'Build and Deploy Job - Dev'
+
+    env:
+      NODE_ENV: development
+      VITE_APP_ENV: dev_env
+      VITE_API_BASE_URL: https://cp-tools-dashboard-functions-app.azurewebsites.net/api
+      VITE_API_KEY: ${{ secrets.VITE_API_KEY_DEV }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+
+      - name: 'Install specific npm version'
+        run: npm install -g npm@9.5.1
+
+      - name: 'Install dependencies'
+        run: npm install
+
+      - name: 'Build Vite Project'
+        run: npm run build
+
+      - name: 'Check if sw-assets.json exists'
+        run: ls -al dist && cat dist/sw-assets.json || echo 'File not found'
+
+      - name: 'Build And Deploy'
+        id: builddeploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_AGREEABLE_GRASS_00FB4681E }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }} # Used for Github integrations (i.e. PR comments)
+          action: 'upload'
+          ###### Repository/Build Configurations - These values can be configured to match your app requirements. ######
+          # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
+          app_location: '/' # App source code path
+          api_location: 'api' # Api source code path - optional
+          output_location: 'dist' # Built app content directory - optional
+          ###### End of Repository/Build Configurations ######
+
+  deploy_functions_app_job:
+    needs: build_and_deploy_job
+    runs-on: windows-latest # Ensure you're using a Windows runner
+    name: 'Deploy Functions App Job - Dev'
+
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_DEV }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET_DEV }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+
+      - name: 'Install specific npm version'
+        run: npm install -g npm@9.5.1
+
+      - name: 'Cache node modules and npm cache'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ./api/node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/api/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: 'Install Azure Functions Core Tools via NPM'
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
+        shell: powershell
+
+      # Log in to Azure using GitHub secret as a service principal
+      - name: 'Login to Azure'
+        run: az login --service-principal -u ${{ env.AZURE_CLIENT_ID }} -p ${{ env.AZURE_CLIENT_SECRET }} --tenant ${{ env.AZURE_TENANT_ID }}
+        shell: powershell
+
+      - name: 'Deploy Azure Functions'
+        working-directory: ./api
+        run: |
+          # Remove existing node_modules if present
+          if (Test-Path node_modules) {
+            Remove-Item -Recurse -Force node_modules
+          }
+
+          # Install dependencies with native module support
+          npm install --include=optional
+
+          # Build the project locally
+          npm run build
+
+          # Publish the built function app to Azure
+          func azure functionapp publish cp-tools-dashboard-functions-app --typescript --no-build
+        shell: powershell
+
+      - name: 'Logout from Azure'
+        run: az logout
+        shell: powershell

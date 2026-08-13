@@ -1,0 +1,52 @@
+trigger: none
+
+stages:
+  - stage: MigrateAndDeploy
+    jobs:
+      - deployment: MigrateAndDeployJob
+        environment: 'Dev'
+        pool:
+          vmImage: 'ubuntu-latest'
+        variables:
+          # Define the secrets as environment variables
+          DB_DRIVER: ${{ secrets.TDDB_DRIVER }}
+          DB_HOST: ${{ secrets.TDDB_HOST }}
+          DB_DATABASE: ${{ secrets.TDDB_DATABASE_DEV }}
+          DB_USER: ${{ secrets.TDDB_USER }}
+          DB_PASSWORD: ${{ secrets.TDDB_PASSWORD }}
+          DB_PORT: ${{ secrets.TDDB_PORT }}
+          DB_ENABLE_ARITH_ABORT: ${{ secrets.TDDB_ENABLE_ARITH_ABORT }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: git checkout dev
+                - checkout: self
+                - script: echo "Installing db-migrate and db-migrate-mssql..."
+                  displayName: 'Install db-migrate and db-migrate-mssql'
+                - script: |
+                    npm install db-migrate
+                    npm install db-migrate-mssql
+                  displayName: 'Install db-migrate and db-migrate-mssql locally'
+                - script: echo "Creating database.json..."
+                  displayName: 'Create database.json file'
+                # Create the database.json file using the environment variables
+                - script: |
+                    echo '{
+                      "driver":"'$TDDB_DRIVER'",
+                      "host":"'$TDDB_HOST'",
+                      "database":"'$TDDB_DATABASE_DEV'",
+                      "user":"'$TDDB_USER'",
+                      "password":"'$TDDB_PASSWORD'",
+                      "port":'$TDDB_PORT',
+                      "options": {
+                        "enableArithAbort": '$TDDB_ENABLE_ARITH_ABORT'
+                      }
+                    }' > database.json
+                  displayName: 'Generate database.json'
+                - script: echo "Navigate to migration folder"
+                  workingDirectory: $(Build.SourcesDirectory)/api/migrations
+                - script: echo "Running DB Migrations for Dev!"
+                - script: npx db-migrate up
+                  displayName: 'Run DB Migrations for Dev'
+                - script: echo "Deploying DB Migrations to Dev!"

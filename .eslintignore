@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.vite
+build
+*.config.js
+*.config.cjs
+vite.config.ts
+*.d.ts
+*.snap
+html/
+__mocks__/
+tests/e2e/
+api/**/*.js
+api/**/*.ts
+.eslintrc.cjs

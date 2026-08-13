@@ -1,0 +1,173 @@
+name: 'FEATURE BRANCH – Lint, Unit Tests, Coverage Gate'
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Needed for PR comments
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: feature-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: development
+  VITE_APP_ENV: feature_branch
+  MIN_LINE_COVERAGE: '77' # required minimum line coverage %
+  UPLOAD_HTML_ARTIFACT: 'true' # set 'false' if quota blocks uploads
+
+jobs:
+  quality_gate:
+    # Keep this EXACT to match required check
+    name: 'Quality Gate - Lint, Unit Tests, & Coverage'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head (merge commit)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # --- TYPE CHECK ---
+      - name: Type check (Vue SFC + TS)
+        run: npm run type-check
+
+      # --- LINT ---
+      - name: Lint (fail on warnings)
+        run: npm run lint:ci
+
+      # --- TESTS + COVERAGE ---
+      - name: Unit tests + coverage (PR head)
+        run: npm run test:coverage
+
+      - name: Assert PR coverage summary exists
+        run: |
+          if [ ! -f coverage/coverage-summary.json ]; then
+            echo "::error::coverage/coverage-summary.json not found — did tests run and is 'json-summary' enabled?"
+            ls -la coverage || true
+            exit 1
+          fi
+
+      - name: Install jq (if missing)
+        run: |
+          command -v jq >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y jq; }
+
+      - name: Read PR coverage %
+        id: prcov
+        run: |
+          PCT=$(jq -r '.total.lines.pct' coverage/coverage-summary.json)
+          if [ "$PCT" = "null" ] || [ -z "$PCT" ]; then
+            echo "::error::Unable to read .total.lines.pct from coverage/coverage-summary.json"
+            cat coverage/coverage-summary.json || true
+            exit 1
+          fi
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+          echo "PR coverage: $PCT %"
+
+      - name: Enforce minimum coverage
+        id: gate
+        run: |
+          REQ=${MIN_LINE_COVERAGE}
+          ACT=${{ steps.prcov.outputs.pct }}
+          echo "Required coverage: ${REQ}%"
+          echo "Actual coverage:   ${ACT}%"
+          awk -v p="$ACT" -v m="$REQ" 'BEGIN {
+            if (p+0 < m+0) { printf("::error::Coverage %.2f%% is below required %.2f%%\n", p, m); exit 1 }
+            else { printf("Coverage OK: %.2f%% >= %.2f%%\n", p, m); exit 0 }
+          }'
+
+      # Prepare + upload HTML report (optional; helps devs drill into lines)
+      - name: Zip HTML report (if present)
+        if: env.UPLOAD_HTML_ARTIFACT == 'true'
+        id: ziphtml
+        run: |
+          if [ -d coverage/lcov-report ]; then
+            (cd coverage && zip -r ../coverage-html.zip lcov-report > /dev/null)
+            echo "has_zip=true" >> "$GITHUB_OUTPUT"
+            ls -lh coverage-html.zip
+          else
+            echo "has_zip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload HTML report (tries regardless of pass/fail)
+        if: env.UPLOAD_HTML_ARTIFACT == 'true' && steps.ziphtml.outputs.has_zip == 'true'
+        id: upload
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: pr-coverage-html-${{ github.run_id }}
+          path: coverage-html.zip
+          retention-days: 14
+
+      # PR comment with coverage + artifact hint
+      - name: Comment on PR with coverage info
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          HAS_ZIP: ${{ steps.ziphtml.outputs.has_zip }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          UPLOAD_HTML_ARTIFACT: ${{ env.UPLOAD_HTML_ARTIFACT }}
+        with:
+          script: |
+            const pr = context.payload.pull_request?.number;
+            if (!pr) { core.info('No PR context; skipping comment.'); return; }
+
+            const req = process.env.MIN_LINE_COVERAGE;
+            const act = '${{ steps.prcov.outputs.pct }}';
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}#artifacts`;
+
+            const uploadEnabled = (process.env.UPLOAD_HTML_ARTIFACT === 'true');
+            const hasZip = (process.env.HAS_ZIP === 'true');
+            const uploadOutcome = process.env.UPLOAD_OUTCOME || '';
+
+            let artifactLine = '';
+            if (uploadEnabled) {
+              if (hasZip && uploadOutcome === 'success') {
+                artifactLine = `\n\n📦 **HTML coverage report** attached as an artifact. Download, unzip, and open \`index.html\`. [Open artifacts](${runUrl})`;
+              } else if (hasZip && uploadOutcome !== '') {
+                artifactLine = `\n\n⚠️ Tried to upload the HTML coverage artifact but it failed (quota likely exceeded). Rerun after cleanup.`;
+              } else {
+                artifactLine = `\n\n(No HTML report folder found to upload.)`;
+              }
+            } else {
+              artifactLine = `\n\n(HTML artifact upload disabled for this run.)`;
+            }
+
+            const body = `🔎 **Coverage check ${parseFloat(act) >= parseFloat(req) ? 'passed' : 'failed'}**`
+              + `\n\n- Required: **${req}%**`
+              + `\n- Actual: **${act}%**`
+              + artifactLine;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+              body
+            });
+
+      # Job summary
+      - name: Post coverage to job summary
+        run: |
+          LINES=$(jq -r '.total.lines.total' coverage/coverage-summary.json)
+          COV=$(jq -r '.total.lines.pct' coverage/coverage-summary.json)
+          REQ=${MIN_LINE_COVERAGE}
+          {
+            echo "## Coverage"
+            echo
+            echo "- Lines total: **$LINES**"
+            echo "- Line coverage: **$COV%**"
+            echo "- Required minimum: **$REQ%**"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,29 @@
+-- Temporarily disabling this trigger to match dev DB state and avoid issues with null task_id inserts.
+
+-- CREATE TRIGGER trg_ValidateUnitTaskMatch
+-- ON field_tracker.blocking_issues
+-- INSTEAD OF INSERT
+-- AS
+-- BEGIN
+--     IF EXISTS (
+--         SELECT 1
+--         FROM inserted AS i
+--         JOIN field_tracker.unit_tasks AS tasks
+--             ON tasks.id = i.task_id
+--         WHERE i.task_id IS NOT NULL AND tasks.unit_by_scope_id != i.unit_id
+--     )
+--     BEGIN
+--         THROW 50000, 'The unit_by_scope_id associated with the task_id does not match the unit_id in the blocking_issues table.', 1;
+--     END;
+
+--     INSERT INTO field_tracker.blocking_issues (
+--         unit_id, task_id, issue_details, status_id, created_at, created_by,
+--         resolved_at, resolved_by, resolution_details, updated_at, updated_by,
+--         deleted_at, deleted_by
+--     )
+--     SELECT
+--         unit_id, task_id, issue_details, status_id, created_at, created_by,
+--         resolved_at, resolved_by, resolution_details, updated_at, updated_by,
+--         deleted_at, deleted_by
+--     FROM inserted;
+-- END;

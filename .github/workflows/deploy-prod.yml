@@ -1,0 +1,121 @@
+name: 'Prod - Azure Static Web Apps CI/CD'
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  NODE_ENV: production
+  VITE_APP_ENV: prod_env
+  VITE_API_BASE_URL_V2: https://api-v2-prod-d4e3bmgbcthzeefn.westus-01.azurewebsites.net
+
+jobs:
+  build_and_deploy_job:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    name: 'Build and Deploy Job'
+
+    env:
+      NODE_ENV: production
+      VITE_APP_ENV: prod_env
+      VITE_API_BASE_URL: https://cp-tools-dashboard-functions-app-prod.azurewebsites.net/api
+      VITE_API_KEY: ${{ secrets.VITE_API_KEY_PROD }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+
+      - name: 'Install specific npm version'
+        run: npm install -g npm@9.5.1
+
+      # This step is optional for SWA since Oryx builds in its own container,
+      # but harmless to keep.
+      - name: 'Install dependencies with npm ci'
+        run: npm ci --omit=dev
+
+      - name: 'Build And Deploy'
+        id: builddeploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_ASHY_COAST_006DB5F1E }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: '/' # App source code path
+          api_location: 'api' # Api source code path - optional
+          output_location: 'dist' # Built app content directory - optional
+          app_build_command: |
+            npm ci --include=dev
+            npm run build
+        env:
+          # Ensure devDependencies are installed inside Oryx container
+          NPM_CONFIG_PRODUCTION: 'false'
+          # Your existing build-time env vars still flow through
+          NODE_ENV: production
+          VITE_APP_ENV: prod_env
+          VITE_API_BASE_URL: https://cp-tools-dashboard-functions-app-prod.azurewebsites.net/api
+          VITE_API_KEY: ${{ secrets.VITE_API_KEY_PROD }}
+
+  deploy_functions_app_job:
+    needs: build_and_deploy_job
+    runs-on: windows-latest
+    name: 'Deploy Functions App Job'
+
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET_PROD }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+
+      - name: 'Install specific npm version'
+        run: npm install -g npm@9.5.1
+
+      - name: 'Cache node modules and npm cache'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ./api/node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/api/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: 'Install Azure Functions Core Tools via NPM'
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
+        shell: powershell
+
+      - name: 'Login to Azure'
+        run: az login --service-principal -u ${{ env.AZURE_CLIENT_ID }} -p ${{ env.AZURE_CLIENT_SECRET }} --tenant ${{ env.AZURE_TENANT_ID }}
+        shell: powershell
+
+      - name: 'Deploy Azure Functions'
+        working-directory: ./api
+        run: |
+          if (Test-Path node_modules) {
+            Remove-Item -Recurse -Force node_modules
+          }
+
+          npm install --include=optional
+          npm run build
+          func azure functionapp publish cp-tools-dashboard-functions-app-prod --typescript --no-build
+        shell: powershell
+
+      - name: 'Logout from Azure'
+        run: az logout
+        shell: powershell

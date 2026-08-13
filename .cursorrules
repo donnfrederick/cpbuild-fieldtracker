@@ -1,0 +1,312 @@
+# CPB Tools Dashboard - Cursor Rules
+
+## Project Overview
+
+**Application:** CPB Tools Dashboard (IHI Tools + Field Tracker)
+**Stack:** Vue 3 + TypeScript + Vite + Azure Static Web App
+**Backend:** Azure Functions (V1) + .NET 9 API (V2)
+**Database:** Shared SQL Server with Command Center
+**Purpose:** Granular task tracking for In-House Install (IHI) teams
+
+---
+
+## Related Projects
+
+This project shares infrastructure with two related projects:
+
+1. **Command Center Dashboard** (`~/Documents/Code/command-center-dashboard/`)
+   - React + TypeScript PWA for subcontractor phase tracking
+   - Shares the same SQL Server database
+   - Different workflow (manual phase tracking vs granular task tracking)
+   - Reference: `~/Documents/Code/command-center-dashboard/docs/database/IHI_VS_COMMAND_CENTER.md`
+
+2. **CPB Tools API V2** (`~/Documents/Code/cpb-tools-api/`)
+   - .NET 9 backend replacing Azure Functions
+   - Serves both Tools Dashboard and Command Center
+   - Reference: `~/Documents/Code/cpb-tools-api/README.md`
+
+---
+
+## Architecture
+
+**Frontend:**
+- Vue 3 Composition API with `<script setup>` syntax
+- TypeScript (strict mode)
+- Vite for build tooling
+- Pinia for state management
+- Bootstrap 5 for UI components
+- Custom service worker for offline capabilities
+
+**Backend:**
+- **V1 API:** Azure Functions (legacy, being migrated)
+- **V2 API:** .NET 9 Web API (new, preferred)
+- SignalR for real-time notifications
+- Hangfire for background jobs
+
+**Offline Capabilities:**
+- Dexie.js (IndexedDB wrapper) for offline storage
+- Custom service worker with network-first caching
+- `useNetworkStore` for connection monitoring
+- `useProcessOfflineDataStore` for sync orchestration
+- SignalR notifications for sync status updates
+
+---
+
+## Database Context (CRITICAL)
+
+**Two Systems, One Database:**
+
+This application shares a SQL Server database with the Command Center Dashboard. Understanding the distinction is critical:
+
+- **IHI Tools (this project):** Granular task tracking for in-house install teams
+- **Command Center:** Manual phase tracking for subcontractor-assigned units
+- **Assignment determined by:** `project_rows.install_team_id` → `install_teams.id`
+  - If `install_teams.name = 'IHI Team'` → IHI workflow (this app)
+  - If `install_teams.name != 'IHI Team'` → Command Center workflow
+  - If `install_team_id IS NULL` → Unassigned unit
+
+**CRITICAL RULES:**
+
+1. **Additive Changes Only:** Never modify tables/columns used by Command Center
+2. **No Breaking Changes:** All new columns must be nullable or have defaults
+3. **Query Differentiation:** Always filter by `install_teams.name = 'IHI Team'` for IHI-specific queries
+4. **Shared Tables:** `users`, `projects`, `project_rows`, `install_teams`, `units_by_scope`, `unit_phases_by_scope`
+5. **IHI-Only Tables:** `team_leads`, `workers`, `unit_tasks`, `work_hour_submissions`, `worker_role_assignments`
+6. **Command Center-Only Tables:** `user_roles`, `user_role_assignments`, `user_special_permissions`, `departments`
+
+**Before making database changes, consult:**
+- `~/Documents/Code/command-center-dashboard/docs/database/IHI_VS_COMMAND_CENTER.md`
+- `~/Documents/Code/command-center-dashboard/docs/database/CURRENT_STATE.md`
+- `~/Documents/Code/command-center-dashboard/docs/database/TABLE_REFERENCE.md`
+
+---
+
+## Coding Standards
+
+### Vue Components
+
+**Use Composition API with `<script setup>`:**
+
+```vue
+<script setup lang="ts">
+import { ref, computed } from 'vue';
+import type { Project } from '@/interfaces/project';
+
+const projects = ref<Project[]>([]);
+const activeProjects = computed(() =>
+  projects.value.filter(p => p.status === 'Active')
+);
+</script>
+```
+
+**Component Structure:**
+1. Imports
+2. Props/Emits definitions
+3. Reactive state
+4. Computed properties
+5. Methods/Functions
+6. Lifecycle hooks
+
+### TypeScript
+
+- **Strict mode enabled** - All types must be explicit
+- Use `interface` for object shapes, `type` for unions/intersections
+- No `any` types (use `unknown` if truly unknown)
+- Define interfaces in `src/interfaces/` by feature area
+
+### Services
+
+**Service Pattern:**
+
+```typescript
+// src/services/installTracker.ts
+import { apiService } from './apiService';
+import type { UnitTask } from '@/interfaces/installTracker';
+
+export const installTrackerService = {
+  async getReadyTasks(userId: number): Promise<UnitTask[]> {
+    return apiService.get<UnitTask[]>(
+      `/api/InstallTracker/GetReadyTaskSummaryByUser?userId=${userId}`
+    );
+  },
+
+  // All API calls go through services
+  // Components never call APIs directly
+};
+```
+
+### Offline-First Development
+
+**All data modification features MUST support offline operation:**
+
+1. **Store action in IndexedDB immediately**
+2. **Show optimistic UI update**
+3. **Attempt API call if online**
+4. **Queue for sync if offline or API fails**
+5. **Show sync status** ("Synced" vs "Pending Sync")
+
+**Example Pattern:**
+
+```typescript
+import { cpBuildIndexedDb } from '@/shared/offlineDb/CPBuildIndexedDb';
+import { useNetworkStore } from '@/stores/useNetworkStore';
+
+const networkStore = useNetworkStore();
+
+async function submitTask(taskId: number, data: TaskSubmission) {
+  // 1. Store in IndexedDB
+  await cpBuildIndexedDb.updateUnitTaskTSV.add({
+    taskId,
+    ...data,
+    timestamp: Date.now(),
+    synced: false,
+  });
+
+  // 2. Update UI immediately
+  updateLocalCache(taskId, data);
+
+  // 3. Sync if online
+  if (!networkStore.isOffline) {
+    try {
+      await api.submitTask(taskId, data);
+      await cpBuildIndexedDb.updateUnitTaskTSV.update(taskId, { synced: true });
+    } catch (error) {
+      // Will sync later via useProcessOfflineDataStore
+      console.warn('Task queued for offline sync', error);
+    }
+  }
+}
+```
+
+---
+
+## Testing
+
+### Unit Tests (Vitest)
+
+- Test files: `*.spec.ts` in `src/tests/`
+- Run: `npm run test`
+- Coverage: `npm run test:coverage`
+
+**What to test:**
+- Component logic (computed properties, methods)
+- Service functions (mock API calls)
+- Store actions/getters
+- Utility functions
+
+**Don't test:**
+- External libraries
+- Vue internals
+- Simple pass-through functions
+
+### E2E Tests (Playwright)
+
+- Test files: `*.e2e.ts` in `e2e/`
+- Run: `npm run test:e2e`
+
+**Focus on:**
+- Critical user flows (login, task submission, clear inspection)
+- Offline/online transitions
+- SignalR real-time updates
+
+---
+
+## Deployment
+
+**Environments:**
+- **Development:** Auto-deploys on push to `dev` branch
+- **Staging:** Auto-deploys on push to `staging` branch
+- **Production:** Auto-deploys on push to `main` branch
+
+**Azure Static Web App Configuration:**
+- Frontend: `staticwebapp.config.json`
+- API: `api/` folder (Azure Functions)
+- GitHub Actions: `.github/workflows/azure-static-web-apps-*.yml`
+
+---
+
+## Migration to V2 API
+
+**Current State:**
+- Most endpoints still use V1 Azure Functions (`api/` folder)
+- Gradually migrating to V2 .NET 9 API (`~/Documents/Code/cpb-tools-api/`)
+
+**When adding new features:**
+1. **Prefer V2 API endpoints** for new functionality
+2. **Document V1 migration tasks** for existing features
+3. **Use feature flags** to switch between V1/V2 if needed
+4. **Update service files** to point to new endpoints
+
+**Service Proxy Generation:**
+- Run `npm run nswag` to regenerate TypeScript client from V2 API
+- Generated files: `src/shared/service-proxies/service-proxies.ts`
+
+---
+
+## Offline Mode Reference
+
+**Key Files:**
+- `src/shared/offlineDb/CPBuildIndexedDb.ts` - IndexedDB schema
+- `src/shared/offlineDb/README.md` - Schema documentation
+- `src/stores/useNetworkStore.ts` - Connection monitoring
+- `src/stores/useProcessOfflineDataStore.ts` - Sync orchestration
+- `public/service-worker.js` - Service worker caching
+
+**For detailed patterns, see:**
+- `~/Documents/Code/command-center-dashboard/docs/guides/OFFLINE_MODE_STRATEGY.md`
+
+---
+
+## Key Principles
+
+1. **Offline-First:** Every write operation must work offline
+2. **Service Layer:** All API calls go through services, never directly from components
+3. **Type Safety:** Strict TypeScript, no `any` types
+4. **Shared Database:** Never break Command Center queries
+5. **V2 API Preferred:** Use V2 endpoints for new features
+6. **Real-Time Updates:** Use SignalR for sync notifications
+7. **Clean Architecture:** Separate concerns (components, services, stores, utilities)
+
+---
+
+## Common Tasks
+
+**Add a new offline table:**
+1. Define interface in `src/shared/offlineDb/interfaces/`
+2. Add table to `CPBuildIndexedDb.ts` schema
+3. Increment version number if schema changes
+4. Create service in `src/shared/offlineDb/services/`
+5. Update `README.md` with schema documentation
+
+**Add a new API endpoint:**
+1. Add method to appropriate service file
+2. Use TypeScript types from `src/interfaces/`
+3. Implement offline queue support if write operation
+4. Test online/offline behavior
+
+**Add a new component:**
+1. Create in `src/components/` or `src/views/`
+2. Use Composition API with `<script setup>`
+3. Import services, not direct API calls
+4. Handle loading/error states
+5. Add Vitest tests in `src/tests/`
+
+---
+
+## Resources
+
+- **Vue 3:** https://vuejs.org/guide/
+- **Pinia:** https://pinia.vuejs.org/
+- **Dexie.js:** https://dexie.org/
+- **Vitest:** https://vitest.dev/
+- **TypeScript:** https://www.typescriptlang.org/docs/
+
+---
+
+## Notes
+
+- This project uses Vue 3, while Command Center uses React
+- Offline patterns are similar but state management differs (Pinia vs Context API)
+- Both projects share the same database and V2 API backend
+- Consult Command Center docs for database schema details
+

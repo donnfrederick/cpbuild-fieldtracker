@@ -1,0 +1,50 @@
+'use strict';
+
+var dbm;
+var type;
+var seed;
+var fs = require('fs');
+var path = require('path');
+var Promise;
+
+/**
+ * DB-017: command_center_observation_scopes junction table.
+ * Links observations to scopes (many-to-many). No scope tags = observation applies to whole unit.
+ * New table, no impact on existing data. No IHI Tools dependency. Idempotent.
+ */
+exports.setup = function(options, seedLink) {
+  dbm = options.dbmigrate;
+  type = dbm.dataType;
+  seed = seedLink;
+  Promise = options.Promise;
+};
+
+exports.up = function(db) {
+  var filePath = path.join(__dirname, 'sqls', '20260212180000-create-command-center-observation-scopes-table-up.sql');
+  return new Promise(function(resolve, reject) {
+    fs.readFile(filePath, { encoding: 'utf-8' }, function(err, data) {
+      if (err) return reject(err);
+      console.log('received data: ' + data);
+      resolve(data);
+    });
+  }).then(function(data) {
+    return db.runSql(data);
+  });
+};
+
+exports.down = function(db) {
+  var filePath = path.join(__dirname, 'sqls', '20260212180000-create-command-center-observation-scopes-table-down.sql');
+  return new Promise(function(resolve, reject) {
+    fs.readFile(filePath, { encoding: 'utf-8' }, function(err, data) {
+      if (err) return reject(err);
+      console.log('received data: ' + data);
+      resolve(data);
+    });
+  }).then(function(data) {
+    return db.runSql(data);
+  });
+};
+
+exports._meta = {
+  version: 1
+};

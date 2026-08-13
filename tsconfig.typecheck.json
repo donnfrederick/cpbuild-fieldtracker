@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "api/interfaces/**/*.ts",
+    "env.d.ts",
+    "src/types.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", "coverage"]
+}

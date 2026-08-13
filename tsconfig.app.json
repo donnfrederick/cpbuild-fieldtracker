@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "types": ["vite/client"],
+    "composite": true,
+    "skipLibCheck": true
+  },
+  "include": ["env.d.ts", "src/**/*", "api/interfaces/**/*", "public/service-worker.js"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "coverage",
+    "api/dist",
+    "api/migrations",
+    "**/service-worker.js",
+    "src/shared/service-proxies/*.js",
+
+    // 🚫 Keep tests out of the app project
+    "src/tests/**/*",
+    "**/*.spec.*",
+    "**/*.test.*",
+    "vitest.setup.ts"
+  ]
+}

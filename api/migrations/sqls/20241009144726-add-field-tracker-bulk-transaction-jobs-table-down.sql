@@ -1,0 +1,41 @@
+BEGIN TRANSACTION;
+
+BEGIN TRY
+    -- Drop bulk_transaction_jobs table
+    IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[field_tracker].[bulk_transaction_jobs]') AND type in (N'U'))
+    BEGIN
+        DROP TABLE field_tracker.bulk_transaction_jobs;
+    END
+
+    COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF (@@TRANCOUNT > 0)
+    BEGIN
+        ROLLBACK TRANSACTION;
+    END
+
+    -- Log the error to the error_log table
+    INSERT INTO dbo.error_log (
+        error_message,
+        error_number,
+        error_severity,
+        error_state,
+        error_procedure,
+        error_line,
+        user_name,
+        app_name
+    ) VALUES (
+        ERROR_MESSAGE(),
+        ERROR_NUMBER(),
+        ERROR_SEVERITY(),
+        ERROR_STATE(),
+        ERROR_PROCEDURE(),
+        ERROR_LINE(),
+        SUSER_SNAME(),
+        'JobTransactionsMigrationScript_Down'
+    );
+
+    -- Re-throw the error to the calling application
+    THROW;
+END CATCH;

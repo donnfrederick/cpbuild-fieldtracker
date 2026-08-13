@@ -1,0 +1,23 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Exception"
+      },
+      "enableDependencyTracking": false
+    },
+    "logLevel": {
+      "default": "Warning",
+      "Host": "Warning",
+      "Host.Results": "Warning",
+      "Host.Aggregator": "Warning",
+      "Function": "Information"
+    }
+  },
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[3.*, 4.0.0)"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["vitest/globals", "vite/client", "node", "jsdom"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] }
+  },
+  "include": ["src/**/*", "src/tests/**/*", "vitest.setup.ts"],
+  "exclude": ["node_modules", "dist", "coverage", "dev-worktree"]
+}

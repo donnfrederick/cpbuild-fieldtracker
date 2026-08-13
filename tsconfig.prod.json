@@ -1,0 +1,39 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": [
+    "env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "api/interfaces/**/*",
+    "public/service-worker.js"
+  ],
+  "exclude": [
+    "src/tests/**/*",
+    "**/*.spec.ts",
+    "**/*.test.ts",
+    "**/__tests__/**/*",
+    "vitest.config.ts",
+    "vitest.setup.ts",
+    "dev-worktree/**",
+    "coverage/**",
+    "dist/**"
+  ],
+  "compilerOptions": {
+    "allowJs": true,
+    "types": ["vite/client", "tabulator-tables"],
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "Bundler",
+    "composite": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@apiInterface/*": ["./api/interfaces/*"]
+    }
+    /* If SW typings ever complain, uncomment one of these:
+    "lib": ["DOM", "ES2021", "WebWorker"]
+    // or add a file: sw-env.d.ts with: /// <reference lib="webworker" />
+    */
+  }
+}
